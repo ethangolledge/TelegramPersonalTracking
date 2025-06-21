@@ -1,7 +1,13 @@
 import os
 from dotenv import load_dotenv
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram.ext import (
+    Application, 
+    ApplicationBuilder,
+    MessageHandler,
+    CommandHandler, 
+    ContextTypes
+)
 
 """need to know the best time to reliably input the data"""
 class TelegramBot:
@@ -25,11 +31,12 @@ class TelegramBot:
         return update.effective_user.first_name if update.effective_user else None
     
     async def start(self, update: Update, _: ContextTypes.DEFAULT_TYPE):
-
-        await update.message.reply_text(
-            f"Hello {self.user_name(update)}, as you're probably aware, I'm a bot. \nI have been specifically designed to help reduce reliance on vaping!\n" \
+        message = (
+            f"Hello {self.user_name(update)}, as you're probably aware, I'm a bot.\n"
+            "I have been specifically designed to help reduce reliance on vaping!\n" \
             "Use /setup to get started or /help for assistance with commands."
         )
+        await update.message.reply_text(message, parse_mode='Markdown')
 
     async def setup(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Setup the bot to determine the user's goal and preferences."""
