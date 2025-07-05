@@ -14,10 +14,15 @@ from telegram.ext import (
 from uuid import uuid4
 import json
 
-# Set up logging
+# Set up logging configuration
+log_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 logging.basicConfig(
+    level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
+    handlers=[
+        logging.FileHandler(os.path.join(log_dir, 'bot.log')),
+        logging.StreamHandler()
+    ]
 )
 logger = logging.getLogger(__name__)
 
@@ -40,6 +45,30 @@ class TelegramBot:
         
         # Set up handlers
         self._create_handlers()
+
+        self.questions = {
+            0: {
+                'question': "📊 How many puffs do you typically take per day?\n\n",
+                'help_text': "Please enter a number (example: 20)",
+                'validation': 'number',
+                'options': None,
+                'error_msg': "❌ Please enter a valid positive number\\."
+            },
+            1: {
+                'question': "🎯 How would you like to reduce your puffs?\n\n",
+                'help_text': "Type 'number' for fixed reduction or 'percent' for percentage reduction",
+                'validation': 'choice',
+                'options': ['number', 'percent'],
+                'error_msg': "❌ Please type either `number` or `percent`\\"
+            },
+            2: {
+                'question': "💪 What's your weekly reduction goal?\n\n",
+                'help_text': "Enter a number for puffs or percentage based on your previous choice",
+                'validation': 'number',
+                'options': None,
+                'error_msg': "❌ Please enter a valid positive number\\."
+            }
+            }
 
     def _create_handlers(self):
         """Create and register all handlers for the bot."""
@@ -64,7 +93,6 @@ class TelegramBot:
             CommandHandler("start", self.start),
             CommandHandler("help", self.help),
             CommandHandler("setup", self.setup),
-            CommandHandler("test", self.test),
             conv_handler
         ]
         
@@ -89,169 +117,89 @@ class TelegramBot:
             f"Use /setup to begin your reduction journey or /help for available commands."
         )
         await update.message.reply_text(welcome_message)
-    
-    async def test(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Display current user data for debugging."""
-        try:
-            # Convert user data to a readable string, handling potential circular references
-            user_data_str = json.dumps(context.user_data, indent=2, default=str)
-            # Escape special characters for Markdown
-            escaped_data = user_data_str.replace('_', '\\_').replace('*', '\\*').replace('[', '\\[').replace(']', '\\]')
-            
-            await update.message.reply_text(
-                f"```\n{escaped_data}\n```",
-                parse_mode='MarkdownV2'
-            )
-        except Exception as e:
-            await update.message.reply_text(f"Error displaying data: {str(e)}")
 
     async def setup(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Initialize user setup process."""
         try:
-            user_id = self.user_id(update)
-            user_name = self.user_name(update)
-            
-            if not user_id or not user_name:
-                raise ValueError("User identification failed")
-
-            # Log the setup initiation
-            logger.info(f"Setup initiated by user {user_name} (ID: {user_id})")
-            
-            # Initialize questions first
-            questions = [
-                "📊 *Question 1:*\nHow many puffs do you typically have per day?\n\n"
-                "Please enter a number (example: 20)",
-                
-                "🎯 *Question 2:*\nHow would you like to reduce your puffs?\n\n"
-                "*Type one of these options:*\n"
-                "• `number` - Reduce by a specific number of puffs\n"
-                "• `percent` - Reduce by a percentage",
-                
-                "💪 *Question 3:*\nWhat's your weekly reduction goal?\n\n"
-                "• If you chose 'number': Enter puffs to reduce (example: 5)\n"
-                "• If you chose 'percent': Enter percentage (example: 10)"
-            ]
-
-            # Check if user already has setup data
-            if self.SETUP_KEY in context.user_data:
-                # Clear existing setup data to start fresh
-                context.user_data.clear()
-                await update.message.reply_text(
-                    "You have already setup your account in the past.\nStarting setup process again from the beginning..."
-                )
-
-            # Initialize user setup data
-            context.user_data['questions'] = questions
+            # Initialize setup data
             context.user_data[self.SETUP_KEY] = {
-                'user_id': user_id,
-                'user_name': user_name,
-                'setup_id': str(uuid4()),
+                'user_id': self.user_id(update),
                 'current_question': 0,
-                'answers': {}  # Store all answers here
+                'answers': {}
             }
 
-            # Define questions with clear instructions
-            context.user_data['questions'] = [
-                "📊 *Question 1:*\nHow many puffs do you typically take per day?\n\n"
-                "Please enter a number (example: 20)",
-                
-                "🎯 *Question 2:*\nHow would you like to reduce your puffs?\n\n"
-                "*Type one of these options:*\n"
-                "• `number` - Reduce by a specific number of puffs\n"
-                "• `percent` - Reduce by a percentage",
-                
-                "💪 *Question 3:*\nWhat's your weekly reduction goal?\n\n"
-                "• If you chose 'number': Enter puffs to reduce (example: 5)\n"
-                "• If you chose 'percent': Enter percentage (example: 10)"
-            ]
-
-            # Send first question
+            # Ask first question
             await update.message.reply_text(
-                context.user_data['questions'][0],
+                self.questions[0]['text'],
                 parse_mode='MarkdownV2'
             )
             return self.ANSWERING
 
         except Exception as e:
-            logger.error(f"Setup error for user {self.user_id(update)}: {str(e)}")
-            await update.message.reply_text(
-                "⚠️ Setup failed\\. Please try again with /setup"
-            )
+            logger.error(f"Setup error: {str(e)}")
+            await update.message.reply_text("⚠️ Setup failed\\. Please try again\\.")
             return ConversationHandler.END
 
     async def handle_answer(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Process answers and manage conversation flow."""
+        """Handle answers and manage conversation flow."""
         try:
             setup_data = context.user_data[self.SETUP_KEY]
             current_q = setup_data['current_question']
             answer = update.message.text.strip().lower()
-            
-            # Process based on current question
-            if current_q == 0:  # Daily puffs
+            question = self.questions[current_q]
+
+            # Validate answer based on question type
+            if question['validation'] == 'number':
                 try:
-                    puffs = int(answer)
-                    if puffs <= 0:
-                        raise ValueError("Puffs must be positive")
-                    setup_data['answers']['daily_puffs'] = puffs
-                    setup_data['current_question'] = 1
-                    await update.message.reply_text(
-                        context.user_data['questions'][1],
-                        parse_mode='MarkdownV2'
-                    )
+                    value = float(answer)
+                    if value <= 0:
+                        raise ValueError()
+                    setup_data['answers'][f'q{current_q}'] = value
                 except ValueError:
                     await update.message.reply_text(
-                        "❌ Please enter a valid positive number\\."
-                    )
-                return self.ANSWERING
-
-            elif current_q == 1:  # Reduction type
-                if answer not in ['number', 'percent']:
-                    await update.message.reply_text(
-                        "❌ Please type either `number` or `percent`\\.",
+                        question['error_msg'],
                         parse_mode='MarkdownV2'
                     )
                     return self.ANSWERING
-                
-                setup_data['answers']['reduction_type'] = answer
-                setup_data['current_question'] = 2
+
+            elif question['validation'] == 'choice':
+                if answer not in question['options']:
+                    await update.message.reply_text(
+                        question['error_msg'],
+                        parse_mode='MarkdownV2'
+                    )
+                    return self.ANSWERING
+                setup_data['answers'][f'q{current_q}'] = answer
+
+            # Move to next question or finish
+            if current_q < len(self.questions) - 1:
+                setup_data['current_question'] += 1
+                next_question = self.questions[setup_data['current_question']]
                 await update.message.reply_text(
-                    context.user_data['questions'][2],
+                    next_question['text'],
                     parse_mode='MarkdownV2'
                 )
                 return self.ANSWERING
+            else:
+                # Create and show summary
+                summary = self._create_summary(setup_data['answers'])
+                await update.message.reply_text(summary, parse_mode='MarkdownV2')
+                return ConversationHandler.END
 
-            elif current_q == 2:  # Goal value
-                try:
-                    goal = float(answer)
-                    if goal <= 0:
-                        raise ValueError("Goal must be positive")
-                    setup_data['answers']['goal_value'] = goal
-                    
-                    # Create summary
-                    summary = self._create_summary(setup_data['answers'])
-                    await update.message.reply_text(summary, parse_mode='MarkdownV2')
-                    return ConversationHandler.END
-                    
-                except ValueError:
-                    await update.message.reply_text(
-                        "❌ Please enter a valid positive number\\."
-                    )
-                    return self.ANSWERING
-
-        except KeyError as e:
-            logger.error(f"Answer handling error: {e}")
+        except Exception as e:
+            logger.error(f"Answer handling error: {str(e)}")
             await update.message.reply_text(
-                "⚠️ Something went wrong\\. Please restart with /setup"
+                "⚠️ Something went wrong\\. Please try /setup again\\."
             )
             return ConversationHandler.END
 
     def _create_summary(self, answers: dict) -> str:
-        """Create a formatted summary of user's answers."""
+        """Create formatted summary of answers."""
         return (
             "✅ *Setup Complete\\!*\n\n"
-            f"Daily puffs: `{answers['daily_puffs']}`\n"
-            f"Reduction type: `{answers['reduction_type']}`\n"
-            f"Weekly goal: `{answers['goal_value']}`"
+            f"Daily puffs: `{answers['q0']}`\n"
+            f"Reduction type: `{answers['q1']}`\n"
+            f"Weekly goal: `{answers['q2']}`"
         )
 
     async def cancel(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
